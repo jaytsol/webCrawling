@@ -1,111 +1,115 @@
-import requests
-from bs4 import BeautifulSoup
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
+import json
+from datetime import datetime
 
-def is_advertisement(element):
-    # Check for advertisement-related elements
-    ad_indicators = ['ad', 'ads', 'advertisement', 'sponsor', 'promoted']
-    classes = element.get('class', [])
-    id_attr = element.get('id', '')
+def crawl_news_by_topic(topic):
+    options = webdriver.ChromeOptions()
+    options.add_argument('--headless')
+    options.add_argument('--disable-gpu')
+    options.add_argument('--no-sandbox')
+    options.add_argument('--disable-dev-shm-usage')
+    options.add_argument('user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36')
     
-    return any(indicator in ' '.join(classes).lower() or indicator in id_attr.lower() 
-              for indicator in ad_indicators)
-
-def get_content_quality(text):
-    # Evaluate text quality based on length
-    if len(text) < 20:
-        return "low"
-    elif len(text) < 100:
-        return "medium"
-    return "high"
-
-def guess_content_label(text):
-    # Estimate content label based on keywords
-    categories = {
-        'tech': ['programming', 'software', 'technology', 'computer', 'digital'],
-        'sports': ['football', 'basketball', 'sports', 'athlete', 'game'],
-        'news': ['breaking', 'report', 'announced', 'according'],
-        'education': ['learning', 'study', 'education', 'academic', 'school']
-    }
-    
-    text_lower = text.lower()
-    for label, keywords in categories.items():
-        if any(keyword in text_lower for keyword in keywords):
-            return label
-    return "general"
-
-def is_menu_or_button(text):
-    # Identify menu items, buttons, logos, etc.
-    menu_patterns = [
-        'menu', 'home', 'login', 'signup', 'search', 'about', 'contact',
-        '메뉴', '홈', '로그인', '회원가입', '검색', '소개', '연락처'
-    ]
-    
-    # Check if text has 3 or fewer words and each word is short
-    words = text.split()
-    if len(words) <= 3:
-        return True
-    
-    # Check for menu/button patterns
-    text_lower = text.lower()
-    if any(pattern in text_lower for pattern in menu_patterns):
-        return True
-        
-    # Check for special characters in short text
-    if len(text) < 15 and any(char in text for char in '»>→◀▶▼▲'):
-        return True
-        
-    return False
-
-def crawl_website(url):
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'
-    }
+    driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=options)
+    wait = WebDriverWait(driver, 3)  # Increase wait time to 3 seconds
     
     try:
-        response = requests.get(url, headers=headers)
-        response.raise_for_status()
-        soup = BeautifulSoup(response.text, 'html.parser')
+        # Construct URLs based on the topic
+        base_url = "https://www.kompas.com/tag/"
+        topic_url = f"{base_url}{topic}"
         
-        # Find all non-advertisement text elements
-        text_elements = soup.find_all(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'span', 'div'])
+        print(f"\nTrying URL: {topic_url}")
+        driver.get(topic_url)
+        
+        wait.until(EC.presence_of_element_located((By.TAG_NAME, 'body')))
+        
+        print(f"Current page title: {driver.title}")
+        
+        selectors = [
+            "//div[contains(@class, 'article__list')]//a",
+            "//div[contains(@class, 'latest--article')]//a",
+            "//div[contains(@class, 'col-bs10-7')]//a",
+            "//div[contains(@class, 'gsc-webResult')]//a"
+        ]
         
         results = []
-        for element in text_elements:
-            if is_advertisement(element):
+        
+        for selector in selectors:
+            try:
+                print(f"Trying selector: {selector}")
+                articles = wait.until(
+                    EC.presence_of_all_elements_located((By.XPATH, selector))
+                )
+                print(f"Found {len(articles)} articles with this selector")
+                
+                if articles:
+                    for article in articles:
+                        try:
+                            link = article.get_attribute('href')
+                            if not link or not link.startswith('http'):
+                                continue
+                                
+                            print(f"Processing article: {link}")
+                            
+                            driver.execute_script(f"window.open('{link}', '_blank');")
+                            driver.switch_to.window(driver.window_handles[-1])
+                            
+                            wait.until(EC.presence_of_element_located((By.TAG_NAME, 'body')))
+                            
+                            title = wait.until(
+                                EC.presence_of_element_located((By.CSS_SELECTOR, '.read__title'))
+                            ).text
+                            
+                            content = wait.until(
+                                EC.presence_of_element_located((By.CSS_SELECTOR, '.read__content'))
+                            ).text
+                            
+                            date = wait.until(
+                                EC.presence_of_element_located((By.CSS_SELECTOR, '.read__time'))
+                            ).text
+                            
+                            if title and content:
+                                result = {
+                                    "text": content,
+                                    "metadata": {
+                                        "title": title,
+                                        "url": link,
+                                        "date": date,
+                                        "category": topic,
+                                        "source": "Kompas.com"
+                                    }
+                                }
+                                results.append(result)
+                                print(f"Successfully collected: {title}")
+                            
+                            driver.close()
+                            driver.switch_to.window(driver.window_handles[0])
+                            
+                        except Exception as e:
+                            print(f"Error processing individual article: {str(e)}")
+                            if len(driver.window_handles) > 1:
+                                driver.close()
+                                driver.switch_to.window(driver.window_handles[0])
+                            continue
+                    
+                    if results:
+                        break
+                        
+            except Exception as e:
+                print(f"Error with selector {selector}: {str(e)}")
                 continue
-                
-            text = element.get_text().strip()
-            words = text.split()
-            
-            # Enhanced text filtering conditions
-            if (text and 
-                len(words) > 3 and  # More than 3 words
-                len(text) > 15 and  # Minimum length
-                not is_menu_or_button(text) and  # Not a menu/button
-                not text.isupper()):  # Not all uppercase
-                
-                result = {
-                    "text": text,
-                    "metadata": {
-                        "label": guess_content_label(text),
-                        "url": url,
-                        "quality": get_content_quality(text),
-                        "tag_name": element.name,
-                        "classes": element.get('class', []),
-                    }
-                }
-                results.append(result)
-
-        # Save results to JSON file
-        import json
-        from datetime import datetime
-
+        
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"output_{timestamp}.json"
+        filename = f"{topic}_news_{timestamp}.json"
         
         with open(filename, 'w', encoding='utf-8') as f:
             json.dump({
-                "url": url,
+                "category": topic,
                 "crawled_at": datetime.now().isoformat(),
                 "total_items": len(results),
                 "items": results
@@ -113,11 +117,16 @@ def crawl_website(url):
             
         print(f"\nCrawling results saved to {filename}")
         return results
-
-    except requests.exceptions.RequestException as e:
-        print(f"Error occurred while fetching the webpage: {e}")
+        
+    except Exception as e:
+        print(f"Major error occurred: {str(e)}")
         return []
+        
+    finally:
+        driver.quit()
 
-# Usage example
-url = "https://lifestyle.kompas.com/fashion"
-results = crawl_website(url)
+if __name__ == "__main__":
+    topic = input("Enter the topic you want to crawl: ")
+    print(f"Starting crawler for topic: {topic}...")
+    news = crawl_news_by_topic(topic)
+    print(f"Crawler finished. Found {len(news)} articles.")
