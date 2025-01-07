@@ -19,6 +19,7 @@ class KompasNewsCrawler:
             'Connection': 'keep-alive',
         }
         self.articles = []
+        self.processed_urls = set()  # 처리된 URL을 저장할 set
         self.is_running = True
         self.session = None
         
@@ -68,21 +69,35 @@ class KompasNewsCrawler:
             logging.error(f"URL 요청 중 에러 발생: {url}, 에러: {str(e)}")
             return None
 
+    async def fetch_article_content(self, url):
+        try:
+            async with self.session.get(url, headers=self.headers) as response:
+                if response.status == 200:
+                    html = await response.text()
+                    soup = BeautifulSoup(html, 'html.parser')
+                    
+                    # 기사 본문 선택자
+                    content_elem = soup.select_one('.read__content')
+                    if content_elem:
+                        # 본문의 모든 문단을 가져와서 합침
+                        paragraphs = content_elem.select('p')
+                        content = ' '.join([p.text.strip() for p in paragraphs])
+                        return content
+                return ''
+        except Exception as e:
+            logging.error(f"기사 본문 가져오기 실패: {url}, 에러: {str(e)}")
+            return ''
+
     async def parse_article_list(self, html, category):
         soup = BeautifulSoup(html, 'html.parser')
         logging.info("HTML 파싱 시작")
         
         articles = soup.select('.article__list')
-        if not articles:
-            articles = soup.select('.col-bs10-7 .article__list')
-        
         logging.info(f"발견된 기사 수: {len(articles)}")
         
-        logging.info("페이지의 주요 클래스들:")
-        for class_name in soup.find_all(class_=True):
-            logging.info(f"발견된 클래스: {class_name.get('class')}")
-        
+        tasks = []
         parsed_articles = []
+        
         for article in articles:
             if not self.is_running:
                 break
@@ -91,23 +106,38 @@ class KompasNewsCrawler:
                 title_elem = article.select_one('a')
                 
                 if title_elem:
+                    article_url = title_elem.get('href')
+                    
+                    # URL이 이미 처리된 경우 건너뛰기
+                    if article_url in self.processed_urls:
+                        logging.info(f"중복 기사 건너뛰기: {title_elem.text.strip()[:30]}...")
+                        continue
+                    
                     article_data = {
                         'title': title_elem.text.strip(),
-                        'content': '',
-                        'article_url': title_elem.get('href'),
+                        'article_url': article_url,
                         'category': category,
                         'date': ''
                     }
                     
                     if self.is_valid_content(article_data['title']):
+                        self.processed_urls.add(article_url)  # URL 추가
+                        tasks.append(self.fetch_article_content(article_url))
                         parsed_articles.append(article_data)
-                        logging.info(f"기사 파싱 완료: {article_data['title'][:30]}...")
-                
+                        logging.info(f"새로운 기사 발견: {article_data['title'][:30]}...")
+            
             except Exception as e:
                 logging.error(f"기사 파싱 중 에러 발생: {str(e)}")
                 continue
         
-        logging.info(f"파싱된 총 기사 수: {len(parsed_articles)}")
+        # 모든 기사 본문을 동시에 가져옴
+        if tasks:
+            contents = await asyncio.gather(*tasks)
+            for article, content in zip(parsed_articles, contents):
+                article['content'] = content
+        
+        logging.info(f"이 페이지에서 파싱된 새로운 기사 수: {len(parsed_articles)}")
+        logging.info(f"총 처리된 고유 기사 수: {len(self.processed_urls)}")
         return parsed_articles
 
     async def crawl_category(self, category):
@@ -121,20 +151,20 @@ class KompasNewsCrawler:
                 
                 html = await self.get_page_content(url)
                 if not html:
-                    logging.error(f"페이지 {page}를 가져오는데 실패했습니다.")
                     break
 
                 new_articles = await self.parse_article_list(html, category)
                 if not new_articles:
-                    logging.info(f"더 이상 기사가 없습니다. 마지막 페이지: {page}")
+                    logging.info(f"더 이상 새로운 기사가 없습니다. 마지막 페이지: {page}")
                     break
-                    
+                
                 self.articles.extend(new_articles)
                 page += 1
                 await asyncio.sleep(0.5)
                 
         finally:
             await self.close_session()
+            logging.info(f"크롤링 완료. 총 수집된 고유 기사 수: {len(self.processed_urls)}")
 
     def save_to_json(self, filename):
         with open(filename, 'w', encoding='utf-8') as f:
