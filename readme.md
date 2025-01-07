@@ -91,6 +91,7 @@ You can use the following keywords as topics to crawl articles from Kompas.com:
 
 When using the `NewsCrawler` class for Kompas.com, you can use the following CSS selectors:
 
+- **Base URL**: `https://www.kompas.com`
 - **Article List Selector**: `.article__list`
 - **Article Content Selector**: `.read__content`
 - **Date Selector**: `.read__time`
