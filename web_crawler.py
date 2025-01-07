@@ -19,7 +19,7 @@ class KompasNewsCrawler:
             'Connection': 'keep-alive',
         }
         self.articles = []
-        self.processed_urls = set()  # 처리된 URL을 저장할 set
+        self.processed_urls = set()  # Set to store processed URLs
         self.is_running = True
         self.session = None
         
@@ -31,7 +31,7 @@ class KompasNewsCrawler:
         signal.signal(signal.SIGINT, self.signal_handler)
 
     def signal_handler(self, signum, frame):
-        print("\n크롤링을 중단합니다...")
+        print("\nStopping the crawling process...")
         self.is_running = False
 
     def is_valid_content(self, text):
@@ -55,18 +55,18 @@ class KompasNewsCrawler:
                     html = await response.text()
                     with open('debug.html', 'w', encoding='utf-8') as f:
                         f.write(html)
-                    logging.info(f"HTML 응답 길이: {len(html)}")
+                    logging.info(f"HTML response length: {len(html)}")
                     
                     soup = BeautifulSoup(html, 'html.parser')
-                    logging.info("페이지 주요 섹션:")
+                    logging.info("Main sections of the page:")
                     for tag in soup.find_all(['div', 'section'], class_=True)[:10]:
-                        logging.info(f"태그: {tag.name}, 클래스: {tag.get('class')}")
+                        logging.info(f"Tag: {tag.name}, Class: {tag.get('class')}")
                     
                     return html
-                logging.error(f"HTTP 에러: {response.status}")
+                logging.error(f"HTTP error: {response.status}")
                 return None
         except Exception as e:
-            logging.error(f"URL 요청 중 에러 발생: {url}, 에러: {str(e)}")
+            logging.error(f"Error occurred while requesting URL: {url}, Error: {str(e)}")
             return None
 
     async def fetch_article_content(self, url):
@@ -76,24 +76,36 @@ class KompasNewsCrawler:
                     html = await response.text()
                     soup = BeautifulSoup(html, 'html.parser')
                     
-                    # 기사 본문 선택자
+                    # Article content selector
                     content_elem = soup.select_one('.read__content')
+                    # Add date selector
+                    date_elem = soup.select_one('.read__time')
+                    
+                    content = ''
+                    date = ''
+                    
                     if content_elem:
-                        # 본문의 모든 문단을 가져와서 합침
                         paragraphs = content_elem.select('p')
                         content = ' '.join([p.text.strip() for p in paragraphs])
-                        return content
-                return ''
+                    
+                    if date_elem:
+                        date = date_elem.text.strip()
+                    
+                    return {
+                        'content': content,
+                        'date': date
+                    }
+                return {'content': '', 'date': ''}
         except Exception as e:
-            logging.error(f"기사 본문 가져오기 실패: {url}, 에러: {str(e)}")
-            return ''
+            logging.error(f"Failed to fetch article content: {url}, Error: {str(e)}")
+            return {'content': '', 'date': ''}
 
     async def parse_article_list(self, html, category):
         soup = BeautifulSoup(html, 'html.parser')
-        logging.info("HTML 파싱 시작")
+        logging.info("Starting HTML parsing")
         
         articles = soup.select('.article__list')
-        logging.info(f"발견된 기사 수: {len(articles)}")
+        logging.info(f"Number of articles found: {len(articles)}")
         
         tasks = []
         parsed_articles = []
@@ -108,36 +120,37 @@ class KompasNewsCrawler:
                 if title_elem:
                     article_url = title_elem.get('href')
                     
-                    # URL이 이미 처리된 경우 건너뛰기
                     if article_url in self.processed_urls:
-                        logging.info(f"중복 기사 건너뛰기: {title_elem.text.strip()[:30]}...")
+                        logging.info(f"Skipping duplicate article: {title_elem.text.strip()[:30]}...")
                         continue
                     
                     article_data = {
                         'title': title_elem.text.strip(),
                         'article_url': article_url,
                         'category': category,
+                        'content': '',
                         'date': ''
                     }
                     
                     if self.is_valid_content(article_data['title']):
-                        self.processed_urls.add(article_url)  # URL 추가
+                        self.processed_urls.add(article_url)
                         tasks.append(self.fetch_article_content(article_url))
                         parsed_articles.append(article_data)
-                        logging.info(f"새로운 기사 발견: {article_data['title'][:30]}...")
+                        logging.info(f"New article found: {article_data['title'][:30]}...")
             
             except Exception as e:
-                logging.error(f"기사 파싱 중 에러 발생: {str(e)}")
+                logging.error(f"Error occurred while parsing article: {str(e)}")
                 continue
         
-        # 모든 기사 본문을 동시에 가져옴
+        # Fetch all article content and dates simultaneously
         if tasks:
-            contents = await asyncio.gather(*tasks)
-            for article, content in zip(parsed_articles, contents):
-                article['content'] = content
+            results = await asyncio.gather(*tasks)
+            for article, result in zip(parsed_articles, results):
+                article['content'] = result['content']
+                article['date'] = result['date']
         
-        logging.info(f"이 페이지에서 파싱된 새로운 기사 수: {len(parsed_articles)}")
-        logging.info(f"총 처리된 고유 기사 수: {len(self.processed_urls)}")
+        logging.info(f"Number of new articles parsed from this page: {len(parsed_articles)}")
+        logging.info(f"Total number of unique articles processed: {len(self.processed_urls)}")
         return parsed_articles
 
     async def crawl_category(self, category):
@@ -147,7 +160,7 @@ class KompasNewsCrawler:
             
             while self.is_running:
                 url = f"{self.base_url}/tag/{category}?page={page}"
-                logging.info(f"페이지 크롤링 중: {url}")
+                logging.info(f"Crawling page: {url}")
                 
                 html = await self.get_page_content(url)
                 if not html:
@@ -155,7 +168,7 @@ class KompasNewsCrawler:
 
                 new_articles = await self.parse_article_list(html, category)
                 if not new_articles:
-                    logging.info(f"더 이상 새로운 기사가 없습니다. 마지막 페이지: {page}")
+                    logging.info(f"No more new articles. Last page: {page}")
                     break
                 
                 self.articles.extend(new_articles)
@@ -164,7 +177,7 @@ class KompasNewsCrawler:
                 
         finally:
             await self.close_session()
-            logging.info(f"크롤링 완료. 총 수집된 고유 기사 수: {len(self.processed_urls)}")
+            logging.info(f"Crawling completed. Total number of unique articles collected: {len(self.processed_urls)}")
 
     def save_to_json(self, filename):
         with open(filename, 'w', encoding='utf-8') as f:
@@ -172,30 +185,30 @@ class KompasNewsCrawler:
                 'total_articles': len(self.articles),
                 'articles': self.articles
             }, f, ensure_ascii=False, indent=2)
-        logging.info(f"데이터가 {filename}에 저장되었습니다.")
+        logging.info(f"Data saved to {filename}")
 
 async def main():
     crawler = KompasNewsCrawler()
-    category = input("크롤링할 카테고리를 입력하세요 (예: wellness): ")
+    category = input("Enter the category to crawl (e.g., wellness): ")
     
-    print("크롤링을 시작합니다. 중단하려면 Ctrl+C를 누르세요.")
+    print("Starting the crawl. Press Ctrl+C to stop.")
     
     start_time = datetime.now()
-    logging.info(f"크롤링 시작: {start_time}")
+    logging.info(f"Crawl started at {start_time}")
     
     try:
         await crawler.crawl_category(category)
     except Exception as e:
-        logging.error(f"크롤링 중 오류 발생: {str(e)}")
+        logging.error(f"Error occurred during crawling: {str(e)}")
     finally:
         if crawler.articles:
             filename = f"kompas_{category}_{start_time.strftime('%Y%m%d_%H%M%S')}.json"
             crawler.save_to_json(filename)
             
             end_time = datetime.now()
-            logging.info(f"크롤링 {'완료' if crawler.is_running else '중단'}: {end_time}")
-            logging.info(f"총 소요시간: {end_time - start_time}")
-            logging.info(f"수집된 총 기사 수: {len(crawler.articles)}")
+            logging.info(f"Crawl completed {'successfully' if crawler.is_running else 'stopped'}: {end_time}")
+            logging.info(f"Total time taken: {end_time - start_time}")
+            logging.info(f"Total number of articles collected: {len(crawler.articles)}")
 
 if __name__ == "__main__":
     asyncio.run(main())
