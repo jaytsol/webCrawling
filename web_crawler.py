@@ -8,18 +8,21 @@ import signal
 from concurrent.futures import ThreadPoolExecutor
 import sys
 
-class KompasNewsCrawler:
-    def __init__(self):
-        self.base_url = "https://www.kompas.com"
-        self.headers = {
+class NewsCrawler:
+    def __init__(self, base_url, article_list_selector, article_content_selector, date_selector, headers=None):
+        self.base_url = base_url
+        self.article_list_selector = article_list_selector
+        self.article_content_selector = article_content_selector
+        self.date_selector = date_selector
+        self.headers = headers if headers else {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
             'Accept-Language': 'en-US,en;q=0.5',
-            'Referer': 'https://www.kompas.com/',
+            'Referer': base_url,
             'Connection': 'keep-alive',
         }
         self.articles = []
-        self.processed_urls = set()  # Set to store processed URLs
+        self.processed_urls = set()
         self.is_running = True
         self.session = None
         
@@ -76,10 +79,8 @@ class KompasNewsCrawler:
                     html = await response.text()
                     soup = BeautifulSoup(html, 'html.parser')
                     
-                    # Article content selector
-                    content_elem = soup.select_one('.read__content')
-                    # Add date selector
-                    date_elem = soup.select_one('.read__time')
+                    content_elem = soup.select_one(self.article_content_selector)
+                    date_elem = soup.select_one(self.date_selector)
                     
                     content = ''
                     date = ''
@@ -104,7 +105,7 @@ class KompasNewsCrawler:
         soup = BeautifulSoup(html, 'html.parser')
         logging.info("Starting HTML parsing")
         
-        articles = soup.select('.article__list')
+        articles = soup.select(self.article_list_selector)
         logging.info(f"Number of articles found: {len(articles)}")
         
         tasks = []
@@ -142,7 +143,6 @@ class KompasNewsCrawler:
                 logging.error(f"Error occurred while parsing article: {str(e)}")
                 continue
         
-        # Fetch all article content and dates simultaneously
         if tasks:
             results = await asyncio.gather(*tasks)
             for article, result in zip(parsed_articles, results):
@@ -188,8 +188,13 @@ class KompasNewsCrawler:
         logging.info(f"Data saved to {filename}")
 
 async def main():
-    crawler = KompasNewsCrawler()
+    base_url = input("Enter the base URL of the news site: ")
+    article_list_selector = input("Enter the CSS selector for the article list: ")
+    article_content_selector = input("Enter the CSS selector for the article content: ")
+    date_selector = input("Enter the CSS selector for the article date: ")
     category = input("Enter the category to crawl (e.g., wellness): ")
+    
+    crawler = NewsCrawler(base_url, article_list_selector, article_content_selector, date_selector)
     
     print("Starting the crawl. Press Ctrl+C to stop.")
     
@@ -202,7 +207,7 @@ async def main():
         logging.error(f"Error occurred during crawling: {str(e)}")
     finally:
         if crawler.articles:
-            filename = f"kompas_{category}_{start_time.strftime('%Y%m%d_%H%M%S')}.json"
+            filename = f"{base_url.split('//')[1].split('/')[0]}_{category}_{start_time.strftime('%Y%m%d_%H%M%S')}.json"
             crawler.save_to_json(filename)
             
             end_time = datetime.now()

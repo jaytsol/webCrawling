@@ -85,4 +85,14 @@ You can use the following keywords as topics to crawl articles from Kompas.com:
 ## Note
 
 - Ensure that the topic you enter is one of the available keywords listed above.
-- The crawler uses Selenium and requires ChromeDriver to be installed. 
+- The crawler uses Selenium and requires ChromeDriver to be installed.
+
+## Kompas.com Selector Examples
+
+When using the `NewsCrawler` class for Kompas.com, you can use the following CSS selectors:
+
+- **Article List Selector**: `.article__list`
+- **Article Content Selector**: `.read__content`
+- **Date Selector**: `.read__time`
+
+These selectors can be used as input when initializing the `NewsCrawler` class to scrape articles from Kompas.com. 
